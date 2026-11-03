@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>JPSME Attendance - Camera Test</title>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
   <style>
     body { font-family: Arial, sans-serif; margin: 0; padding: 12px; background: #f6f7f9; }
     h2 { margin: 0 0 8px 0; }
@@ -12,15 +12,17 @@
     video { width: 100%; display: block; }
     button { padding: 12px 18px; font-size: 16px; margin: 10px 0; }
     #result { font-size: 22px; font-weight: bold; margin-top: 4px; word-break: break-all; }
+    #info { font-size: 13px; color: #555; margin-top: 8px; }
     #msg { color: #b00020; margin-top: 8px; }
   </style>
 </head>
 <body>
-  <h2>Camera test</h2>
+  <h2>Camera test (version 2)</h2>
   <button id="start">Start camera</button>
   <div id="cam"><video id="video" playsinline muted></video></div>
   <div style="margin-top:8px">Last scan:</div>
   <div id="result">(nothing yet)</div>
+  <div id="info">Not started.</div>
   <div id="msg"></div>
   <canvas id="canvas" style="display:none"></canvas>
 
@@ -29,40 +31,92 @@
     const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     let scanning = false;
+    let detector = null;
+    let engine = 'none';
+    let frames = 0;
 
     document.getElementById('start').onclick = startCamera;
+
+    async function setupEngine() {
+      if ('BarcodeDetector' in window) {
+        try {
+          const formats = await BarcodeDetector.getSupportedFormats();
+          if (formats.indexOf('qr_code') !== -1) {
+            detector = new BarcodeDetector({ formats: ['qr_code'] });
+            engine = 'built-in reader';
+            return;
+          }
+        } catch (e) { /* fall through to the library */ }
+      }
+      if (typeof jsQR !== 'undefined') {
+        engine = 'jsQR library';
+      } else {
+        engine = 'NONE (library did not load)';
+        showMessage('The QR reading library did not load. Check your internet connection and refresh.');
+      }
+    }
 
     async function startCamera() {
       showMessage('');
       try {
+        await setupEngine();
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: 'environment' } },
+          video: {
+            facingMode: { ideal: 'environment' },
+            width: { ideal: 1280 },
+            height: { ideal: 720 }
+          },
           audio: false
         });
         video.srcObject = stream;
         await video.play();
+
+        // ask for continuous focus when the phone supports it
+        try {
+          const track = stream.getVideoTracks()[0];
+          await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
+        } catch (e) { /* not supported, that's fine */ }
+
         scanning = true;
-        requestAnimationFrame(tick);
+        tick();
       } catch (e) {
         showMessage('Camera error: ' + e.name + ' - ' + e.message);
       }
     }
 
-    function tick() {
+    async function tick() {
       if (!scanning) return;
-      if (video.readyState === video.HAVE_ENOUGH_DATA && video.videoWidth > 0) {
-        const scale = Math.min(1, 640 / video.videoWidth);
-        canvas.width = Math.round(video.videoWidth * scale);
-        canvas.height = Math.round(video.videoHeight * scale);
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const code = jsQR(img.data, img.width, img.height, { inversionAttempts: 'dontInvert' });
-        if (code && code.data) {
-          document.getElementById('result').textContent = code.data;
-          if (navigator.vibrate) navigator.vibrate(100);
+      try {
+        if (video.readyState >= 2 && video.videoWidth > 0) {
+          frames++;
+          let text = null;
+
+          if (detector) {
+            const codes = await detector.detect(video);
+            if (codes.length > 0) text = codes[0].rawValue;
+          } else if (typeof jsQR !== 'undefined') {
+            const scale = Math.min(1, 800 / video.videoWidth);
+            canvas.width = Math.round(video.videoWidth * scale);
+            canvas.height = Math.round(video.videoHeight * scale);
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const code = jsQR(img.data, img.width, img.height, { inversionAttempts: 'attemptBoth' });
+            if (code && code.data) text = code.data;
+          }
+
+          if (text) {
+            document.getElementById('result').textContent = text;
+            if (navigator.vibrate) navigator.vibrate(100);
+          }
+
+          document.getElementById('info').textContent =
+            'Reader: ' + engine + ' | Video: ' + video.videoWidth + 'x' + video.videoHeight +
+            ' | Frames checked: ' + frames;
         }
+      } catch (e) {
+        showMessage('Scan error: ' + e.message);
       }
-      requestAnimationFrame(tick);
+      setTimeout(tick, 120);
     }
 
     function showMessage(text) {
