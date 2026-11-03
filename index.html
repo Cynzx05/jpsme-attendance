@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>JPSME Attendance - Camera Test</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; padding: 12px; background: #f6f7f9; }
+    h2 { margin: 0 0 8px 0; }
+    #cam { width: 100%; max-width: 420px; background: #000; border-radius: 8px; overflow: hidden; }
+    video { width: 100%; display: block; }
+    button { padding: 12px 18px; font-size: 16px; margin: 10px 0; }
+    #result { font-size: 22px; font-weight: bold; margin-top: 4px; word-break: break-all; }
+    #msg { color: #b00020; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <h2>Camera test</h2>
+  <button id="start">Start camera</button>
+  <div id="cam"><video id="video" playsinline muted></video></div>
+  <div style="margin-top:8px">Last scan:</div>
+  <div id="result">(nothing yet)</div>
+  <div id="msg"></div>
+  <canvas id="canvas" style="display:none"></canvas>
+
+  <script>
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    let scanning = false;
+
+    document.getElementById('start').onclick = startCamera;
+
+    async function startCamera() {
+      showMessage('');
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: 'environment' } },
+          audio: false
+        });
+        video.srcObject = stream;
+        await video.play();
+        scanning = true;
+        requestAnimationFrame(tick);
+      } catch (e) {
+        showMessage('Camera error: ' + e.name + ' - ' + e.message);
+      }
+    }
+
+    function tick() {
+      if (!scanning) return;
+      if (video.readyState === video.HAVE_ENOUGH_DATA && video.videoWidth > 0) {
+        const scale = Math.min(1, 640 / video.videoWidth);
+        canvas.width = Math.round(video.videoWidth * scale);
+        canvas.height = Math.round(video.videoHeight * scale);
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const code = jsQR(img.data, img.width, img.height, { inversionAttempts: 'dontInvert' });
+        if (code && code.data) {
+          document.getElementById('result').textContent = code.data;
+          if (navigator.vibrate) navigator.vibrate(100);
+        }
+      }
+      requestAnimationFrame(tick);
+    }
+
+    function showMessage(text) {
+      document.getElementById('msg').textContent = text;
+    }
+  </script>
+</body>
+</html>
