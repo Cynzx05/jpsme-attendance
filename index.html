@@ -15,14 +15,16 @@
     .top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
     .top button { padding: 6px 12px; }
     label { font-weight: bold; font-size: 14px; }
-    select { width: 100%; padding: 10px; font-size: 16px; margin: 4px 0 8px 0; }
+    select, input[type=text] { width: 100%; padding: 10px; font-size: 16px; margin: 4px 0 8px 0; }
     #refresh { padding: 6px 12px; font-size: 14px; margin-bottom: 10px; }
     #stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 10px; }
     .stat { background: #fff; border-radius: 8px; padding: 8px 4px; text-align: center; }
     .stat b { display: block; font-size: 22px; }
     .stat span { font-size: 11px; color: #555; }
-    #camBtn { width: 100%; padding: 14px; font-size: 18px; margin-bottom: 10px; }
-    #cam { background: #000; border-radius: 10px; overflow: hidden; margin-bottom: 10px; }
+    .row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; font-size: 14px; }
+    #camBtn { width: 100%; padding: 14px; font-size: 18px; margin-bottom: 8px; }
+    #banner { background: #222; color: #fff; text-align: center; padding: 8px; border-radius: 8px 8px 0 0; font-weight: bold; }
+    #cam { background: #000; border-radius: 0 0 10px 10px; overflow: hidden; margin-bottom: 10px; }
     video { width: 100%; display: block; }
     #result { border-radius: 10px; padding: 14px; text-align: center; background: #fff; }
     #result .t { font-size: 20px; font-weight: bold; }
@@ -33,6 +35,12 @@
     .out { background: #d9eaff !important; border: 2px solid #2f6fd0; }
     .warn { background: #fff3cd !important; border: 2px solid #d9a400; }
     .bad { background: #fde0e0 !important; border: 2px solid #c62828; }
+    .box { background: #fff; border-radius: 10px; padding: 12px; margin-top: 12px; }
+    .box h4 { margin: 0 0 6px 0; }
+    .box button { padding: 10px 14px; font-size: 15px; }
+    #recent { margin: 0; padding-left: 18px; font-size: 13px; }
+    #recent li { margin-bottom: 3px; }
+    #fixMsg { margin-top: 8px; font-size: 14px; }
     #info { font-size: 12px; color: #666; margin-top: 8px; text-align: center; }
     #signinMsg { color: #b00020; min-height: 20px; }
   </style>
@@ -65,10 +73,40 @@
       <div class="stat"><b id="sDone">-</b><span>Completed</span></div>
     </div>
 
+    <div class="row">
+      <span>Sound feedback</span>
+      <label><input type="checkbox" id="sound" checked> On</label>
+    </div>
+
     <button id="camBtn">Start camera</button>
+    <div id="banner" class="hidden"></div>
     <div id="cam" class="hidden"><video id="video" playsinline muted></video></div>
 
     <div id="result">Select an event, then start the camera.</div>
+
+    <div class="box">
+      <h4>Can't scan a card? Type the ID</h4>
+      <input type="text" id="manualId" placeholder="e.g. 2024-0741" autocomplete="off">
+      <button id="manualBtn">Record</button>
+    </div>
+
+    <div class="box">
+      <h4>Recent scans</h4>
+      <ol id="recent"></ol>
+    </div>
+
+    <div class="box hidden" id="admin">
+      <h4>Admin: correct a record</h4>
+      <input type="text" id="fixId" placeholder="Student ID" autocomplete="off">
+      <select id="fixAction">
+        <option value="CLEAR_TIME_OUT">Clear time out (mark as inside again)</option>
+        <option value="DELETE_RECORD">Delete the whole record for this event</option>
+      </select>
+      <input type="text" id="fixReason" placeholder="Reason (required)" autocomplete="off">
+      <button id="fixBtn">Apply correction</button>
+      <div id="fixMsg"></div>
+    </div>
+
     <div id="info"></div>
   </div>
 
@@ -77,7 +115,7 @@
   <script>
     // ---------- SETTINGS ----------
     const CLIENT_ID = '646402889810-r6dflk4blp6p72tbqh6kme6vs3b230qp.apps.googleusercontent.com';
-    const API_URL = 'https://script.google.com/macros/s/AKfycbwyudP0jRC3PE5uG7UC7gZ79wnSOnIiENxyrGBmoADG5AbB4rV8ZDGZFcz9JoA-AARI/exec';
+    const API_URL = 'PASTE_YOUR_EXEC_URL_HERE';
 
     // ---------- STATE ----------
     let idToken = null;
@@ -90,20 +128,27 @@
     let stream = null;
     let lastCode = '';
     let lastTime = 0;
+    let audioCtx = null;
+    const recent = [];
 
     const $ = function (id) { return document.getElementById(id); };
     const video = $('video');
     const canvas = $('canvas');
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
 
+    const KINDS = {
+      TIME_IN:      { cls: 'ok',   title: 'TIME IN',           buzz: [120],        sound: 'ok' },
+      TIME_OUT:     { cls: 'out',  title: 'TIME OUT',          buzz: [120],        sound: 'out' },
+      DUPLICATE:    { cls: 'warn', title: 'DUPLICATE SCAN',    buzz: [80, 60, 80], sound: 'warn' },
+      COMPLETED:    { cls: 'warn', title: 'ALREADY COMPLETED', buzz: [80, 60, 80], sound: 'warn' },
+      UNREGISTERED: { cls: 'bad',  title: 'NOT REGISTERED',    buzz: [400],        sound: 'bad' },
+      ERROR:        { cls: 'bad',  title: 'ERROR',             buzz: [400],        sound: 'bad' }
+    };
+
     // ---------- START ----------
     window.addEventListener('load', function () {
       idToken = restoreToken();
-      if (idToken) {
-        loadApp();
-      } else {
-        showSignin('');
-      }
+      if (idToken) { loadApp(); } else { showSignin(''); }
       startSignIn();
     });
 
@@ -112,11 +157,7 @@
         setTimeout(startSignIn, 200);
         return;
       }
-      google.accounts.id.initialize({
-        client_id: CLIENT_ID,
-        callback: onCredential,
-        auto_select: true
-      });
+      google.accounts.id.initialize({ client_id: CLIENT_ID, callback: onCredential, auto_select: true });
       google.accounts.id.renderButton($('gbtn'), { theme: 'filled_blue', size: 'large', text: 'signin_with' });
     }
 
@@ -164,7 +205,6 @@
     // ---------- TALKING TO THE BACKEND ----------
     async function api(payload) {
       payload.token = idToken;
-      // No custom headers, so the browser sends a simple request
       const res = await fetch(API_URL, { method: 'POST', body: JSON.stringify(payload) });
       return await res.json();
     }
@@ -192,10 +232,16 @@
       }
       $('who').textContent = data.officer.name || data.officer.email;
       $('role').textContent = data.officer.role;
+      $('admin').classList.toggle('hidden', data.officer.role !== 'ADMIN');
       events = data.events || [];
       fillEvents();
       showApp();
       refreshStats();
+    }
+
+    function eventTitle() {
+      const opt = $('event').selectedOptions[0];
+      return opt && opt.value ? opt.textContent : '';
     }
 
     function fillEvents() {
@@ -219,12 +265,15 @@
     }
 
     $('event').onchange = function () {
+      // Changing the event always stops the camera, so a scan can't go to the wrong event
+      const wasScanning = scanning;
+      stopCamera();
       selectedEvent = $('event').value;
       setStats(null);
       updateCamButton();
       refreshStats();
       if (selectedEvent) {
-        showPlain('Event selected: ' + $('event').selectedOptions[0].textContent);
+        showPlain('Event selected: ' + eventTitle() + (wasScanning ? '. The camera was stopped. Start it again to scan.' : ''));
       }
     };
 
@@ -252,6 +301,38 @@
       $('sDone').textContent = s ? s.completed : '-';
     }
 
+    // ---------- SOUNDS ----------
+    function getAudio() {
+      if (!$('sound').checked) return null;
+      try {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+        return audioCtx;
+      } catch (e) { return null; }
+    }
+
+    function beep(freq, startAt, duration, type) {
+      const ac = getAudio();
+      if (!ac) return;
+      const osc = ac.createOscillator();
+      const gain = ac.createGain();
+      osc.type = type || 'sine';
+      osc.frequency.value = freq;
+      gain.gain.value = 0.2;
+      osc.connect(gain);
+      gain.connect(ac.destination);
+      const t = ac.currentTime + startAt;
+      osc.start(t);
+      osc.stop(t + duration);
+    }
+
+    function playSound(kind) {
+      if (kind === 'ok') { beep(880, 0, 0.15); }
+      else if (kind === 'out') { beep(660, 0, 0.12); beep(880, 0.15, 0.15); }
+      else if (kind === 'warn') { beep(440, 0, 0.12, 'square'); beep(440, 0.2, 0.12, 'square'); }
+      else { beep(180, 0, 0.5, 'sawtooth'); }
+    }
+
     // ---------- SHOWING RESULTS ----------
     function showPlain(text) {
       const box = $('result');
@@ -260,22 +341,14 @@
     }
 
     function showResult(data) {
-      const kinds = {
-        TIME_IN:      { cls: 'ok',   title: 'TIME IN',           buzz: [120] },
-        TIME_OUT:     { cls: 'out',  title: 'TIME OUT',          buzz: [120] },
-        DUPLICATE:    { cls: 'warn', title: 'DUPLICATE SCAN',    buzz: [80, 60, 80] },
-        COMPLETED:    { cls: 'warn', title: 'ALREADY COMPLETED', buzz: [80, 60, 80] },
-        UNREGISTERED: { cls: 'bad',  title: 'NOT REGISTERED',    buzz: [400] },
-        ERROR:        { cls: 'bad',  title: 'ERROR',             buzz: [400] }
-      };
-      const kind = kinds[data.status] || kinds.ERROR;
+      const kind = KINDS[data.status] || KINDS.ERROR;
       const box = $('result');
       box.className = kind.cls;
       box.innerHTML = '';
 
       const ev = document.createElement('div');
       ev.className = 'ev';
-      ev.textContent = 'Event: ' + ($('event').selectedOptions[0] ? $('event').selectedOptions[0].textContent : '');
+      ev.textContent = 'Event: ' + eventTitle();
       box.appendChild(ev);
 
       const t = document.createElement('div');
@@ -299,6 +372,21 @@
       box.appendChild(m);
 
       if (navigator.vibrate) navigator.vibrate(kind.buzz);
+      playSound(kind.sound);
+      addRecent(kind.title, data.student ? data.student.name : '(unknown ID)');
+    }
+
+    function addRecent(title, name) {
+      const time = new Date().toLocaleTimeString('en-PH', { timeZone: 'Asia/Manila', hour: '2-digit', minute: '2-digit' });
+      recent.unshift(time + ' - ' + title + ' - ' + name);
+      if (recent.length > 8) recent.pop();
+      const list = $('recent');
+      list.innerHTML = '';
+      recent.forEach(function (line) {
+        const li = document.createElement('li');
+        li.textContent = line;
+        list.appendChild(li);
+      });
     }
 
     // ---------- CAMERA ----------
@@ -308,6 +396,7 @@
     }
 
     $('camBtn').onclick = function () {
+      getAudio();   // lets the browser allow sounds
       if (scanning) stopCamera(); else startCamera();
     };
 
@@ -339,6 +428,8 @@
         try {
           await stream.getVideoTracks()[0].applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
         } catch (e) { /* not supported */ }
+        $('banner').textContent = 'Scanning for: ' + eventTitle();
+        $('banner').classList.remove('hidden');
         $('cam').classList.remove('hidden');
         scanning = true;
         updateCamButton();
@@ -354,6 +445,7 @@
       if (stream) { stream.getTracks().forEach(function (t) { t.stop(); }); stream = null; }
       video.srcObject = null;
       $('cam').classList.add('hidden');
+      $('banner').classList.add('hidden');
       updateCamButton();
     }
 
@@ -374,18 +466,21 @@
             const code = jsQR(img.data, img.width, img.height, { inversionAttempts: 'attemptBoth' });
             if (code && code.data) text = code.data;
           }
-          if (text) await handleCode(text);
+          if (text) await handleCode(text, false);
         }
       } catch (e) { /* skip this frame */ }
       setTimeout(tick, 120);
     }
 
-    // ---------- HANDLING ONE SCANNED CODE ----------
-    async function handleCode(text) {
+    // ---------- HANDLING ONE SCANNED OR TYPED CODE ----------
+    async function handleCode(text, manual) {
       const code = String(text).trim();
-      if (!code || busy) return;
+      if (!code) return;
+      if (busy) { if (manual) showPlain('Please wait, another scan is being checked.'); return; }
+      if (!selectedEvent) { showPlain('Please select an event first.'); return; }
+
       const now = Date.now();
-      if (code === lastCode && now - lastTime < 5000) return;   // same card still in view
+      if (!manual && code === lastCode && now - lastTime < 5000) return;   // same card still in view
       lastCode = code;
       lastTime = now;
 
@@ -407,6 +502,46 @@
         lastTime = Date.now();
       }
     }
+
+    // ---------- MANUAL ENTRY ----------
+    $('manualBtn').onclick = async function () {
+      const value = $('manualId').value.trim();
+      if (!value) return;
+      getAudio();
+      await handleCode(value, true);
+      $('manualId').value = '';
+    };
+    $('manualId').addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') $('manualBtn').click();
+    });
+
+    // ---------- ADMIN CORRECTIONS ----------
+    $('fixBtn').onclick = async function () {
+      const msg = $('fixMsg');
+      msg.textContent = '';
+      if (!selectedEvent) { msg.textContent = 'Please select an event first.'; return; }
+
+      const id = $('fixId').value.trim();
+      const action = $('fixAction').value;
+      const reason = $('fixReason').value.trim();
+      if (!id || reason.length < 3) { msg.textContent = 'Please enter the student ID and a reason.'; return; }
+
+      const what = action === 'DELETE_RECORD' ? 'DELETE the whole record of' : 'CLEAR the time out of';
+      if (!confirm('Are you sure you want to ' + what + ' ' + id + ' in "' + eventTitle() + '"?')) return;
+
+      msg.textContent = 'Working...';
+      try {
+        const data = await api({ action: 'correct', event: selectedEvent, id: id, correction: action, reason: reason });
+        if (data.authError) { handleAuthProblem(data); return; }
+        msg.textContent = data.message || (data.ok ? 'Done.' : 'Not done.');
+        msg.style.color = data.ok ? '#1b7f3b' : '#b00020';
+        if (data.stats) setStats(data.stats);
+        if (data.ok) { $('fixId').value = ''; $('fixReason').value = ''; }
+      } catch (e) {
+        msg.style.color = '#b00020';
+        msg.textContent = 'Network problem. Please check and try again.';
+      }
+    };
   </script>
 </body>
 </html>
