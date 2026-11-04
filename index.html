@@ -24,8 +24,10 @@
     .row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; font-size: 14px; }
     #camBtn { width: 100%; padding: 14px; font-size: 18px; margin-bottom: 8px; }
     #banner { background: #222; color: #fff; text-align: center; padding: 8px; border-radius: 8px 8px 0 0; font-weight: bold; }
-    #cam { background: #000; border-radius: 0 0 10px 10px; overflow: hidden; margin-bottom: 10px; }
-    video { width: 100%; display: block; }
+    #cam { position: relative; width: 100%; aspect-ratio: 1 / 1; background: #000; border-radius: 0 0 10px 10px; overflow: hidden; margin-bottom: 10px; }
+    #cam video { width: 100%; height: 100%; object-fit: cover; display: block; }
+    #frame { position: absolute; top: 8%; left: 8%; right: 8%; bottom: 8%; border: 3px solid rgba(255,255,255,0.85); border-radius: 14px; pointer-events: none; }
+    #hint { text-align: center; font-size: 13px; color: #555; margin: -4px 0 10px 0; }
     #result { border-radius: 10px; padding: 14px; text-align: center; background: #fff; }
     #result .t { font-size: 20px; font-weight: bold; }
     #result .n { font-size: 22px; font-weight: bold; margin: 6px 0 2px 0; }
@@ -37,9 +39,11 @@
     .bad { background: #fde0e0 !important; border: 2px solid #c62828; }
     .box { background: #fff; border-radius: 10px; padding: 12px; margin-top: 12px; }
     .box h4 { margin: 0 0 6px 0; }
-    .box button { padding: 10px 14px; font-size: 15px; }
+    .box button.act { padding: 10px 14px; font-size: 15px; }
+    .pick { display: block; width: 100%; text-align: left; padding: 10px; margin: 4px 0; font-size: 15px; }
     #recent { margin: 0; padding-left: 18px; font-size: 13px; }
     #recent li { margin-bottom: 3px; }
+    #fixSelected { font-size: 14px; margin: 4px 0 8px 0; font-weight: bold; }
     #fixMsg { margin-top: 8px; font-size: 14px; }
     #info { font-size: 12px; color: #666; margin-top: 8px; text-align: center; }
     #signinMsg { color: #b00020; min-height: 20px; }
@@ -80,14 +84,18 @@
 
     <button id="camBtn">Start camera</button>
     <div id="banner" class="hidden"></div>
-    <div id="cam" class="hidden"><video id="video" playsinline muted></video></div>
+    <div id="cam" class="hidden">
+      <video id="video" playsinline muted></video>
+      <div id="frame"></div>
+    </div>
+    <div id="hint" class="hidden">Center the QR code inside the square.</div>
 
     <div id="result">Select an event, then start the camera.</div>
 
     <div class="box">
-      <h4>Can't scan a card? Type the ID</h4>
-      <input type="text" id="manualId" placeholder="" autocomplete="off">
-      <button id="manualBtn">Record</button>
+      <h4>Can't scan a card? Search by name</h4>
+      <input type="text" id="manualSearch" placeholder="Type at least 2 letters of the name" autocomplete="off">
+      <div id="manualResults"></div>
     </div>
 
     <div class="box">
@@ -97,13 +105,15 @@
 
     <div class="box hidden" id="admin">
       <h4>Admin: correct a record</h4>
-      <input type="text" id="fixId" placeholder="Student ID" autocomplete="off">
+      <input type="text" id="fixSearch" placeholder="Search the student by name" autocomplete="off">
+      <div id="fixResults"></div>
+      <div id="fixSelected">No student selected.</div>
       <select id="fixAction">
         <option value="CLEAR_TIME_OUT">Clear time out (mark as inside again)</option>
         <option value="DELETE_RECORD">Delete the whole record for this event</option>
       </select>
       <input type="text" id="fixReason" placeholder="Reason (required)" autocomplete="off">
-      <button id="fixBtn">Apply correction</button>
+      <button class="act" id="fixBtn">Apply correction</button>
       <div id="fixMsg"></div>
     </div>
 
@@ -129,6 +139,8 @@
     let lastCode = '';
     let lastTime = 0;
     let audioCtx = null;
+    let fixStudent = null;
+    let searchCounter = 0;
     const recent = [];
 
     const $ = function (id) { return document.getElementById(id); };
@@ -362,7 +374,7 @@
         n.textContent = data.student.name;
         box.appendChild(n);
         const b = document.createElement('div');
-        b.textContent = data.student.id + '  |  ' + data.student.block;
+        b.textContent = data.student.block;
         box.appendChild(b);
       }
 
@@ -373,7 +385,7 @@
 
       if (navigator.vibrate) navigator.vibrate(kind.buzz);
       playSound(kind.sound);
-      addRecent(kind.title, data.student ? data.student.name : '(unknown ID)');
+      addRecent(kind.title, data.student ? data.student.name : '(not recognized)');
     }
 
     function addRecent(title, name) {
@@ -389,7 +401,7 @@
       });
     }
 
-    // ---------- CAMERA ----------
+    // ---------- CAMERA (square) ----------
     function updateCamButton() {
       $('camBtn').disabled = !selectedEvent;
       $('camBtn').textContent = scanning ? 'Stop camera' : 'Start camera';
@@ -431,6 +443,7 @@
         $('banner').textContent = 'Scanning for: ' + eventTitle();
         $('banner').classList.remove('hidden');
         $('cam').classList.remove('hidden');
+        $('hint').classList.remove('hidden');
         scanning = true;
         updateCamButton();
         $('info').textContent = 'Reader: ' + engine;
@@ -446,6 +459,7 @@
       video.srcObject = null;
       $('cam').classList.add('hidden');
       $('banner').classList.add('hidden');
+      $('hint').classList.add('hidden');
       updateCamButton();
     }
 
@@ -453,41 +467,42 @@
       if (!scanning) return;
       try {
         if (video.readyState >= 2 && video.videoWidth > 0 && !busy) {
+          // Only the centre square of the picture is read, the same part you can see
+          const vw = video.videoWidth;
+          const vh = video.videoHeight;
+          const side = Math.min(vw, vh);
+          const sx = (vw - side) / 2;
+          const sy = (vh - side) / 2;
+          const size = Math.min(side, 800);
+          canvas.width = size;
+          canvas.height = size;
+          ctx.drawImage(video, sx, sy, side, side, 0, 0, size, size);
+
           let text = null;
           if (detector) {
-            const codes = await detector.detect(video);
+            const codes = await detector.detect(canvas);
             if (codes.length > 0) text = codes[0].rawValue;
           } else {
-            const scale = Math.min(1, 800 / video.videoWidth);
-            canvas.width = Math.round(video.videoWidth * scale);
-            canvas.height = Math.round(video.videoHeight * scale);
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-            const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const img = ctx.getImageData(0, 0, size, size);
             const code = jsQR(img.data, img.width, img.height, { inversionAttempts: 'attemptBoth' });
             if (code && code.data) text = code.data;
           }
-          if (text) await handleCode(text, false);
+          if (text) await handleScannedCode(text);
         }
       } catch (e) { /* skip this frame */ }
       setTimeout(tick, 120);
     }
 
-    // ---------- HANDLING ONE SCANNED OR TYPED CODE ----------
-    async function handleCode(text, manual) {
-      const code = String(text).trim();
-      if (!code) return;
-      if (busy) { if (manual) showPlain('Please wait, another scan is being checked.'); return; }
+    // ---------- RECORDING A SCAN ----------
+    async function submitScan(request, isManual) {
+      if (busy) { if (isManual) showPlain('Please wait, another scan is being checked.'); return; }
       if (!selectedEvent) { showPlain('Please select an event first.'); return; }
-
-      const now = Date.now();
-      if (!manual && code === lastCode && now - lastTime < 5000) return;   // same card still in view
-      lastCode = code;
-      lastTime = now;
 
       busy = true;
       showPlain('Checking...');
       try {
-        const data = await api({ action: 'scan', event: selectedEvent, id: code });
+        request.event = selectedEvent;
+        const data = await api(request);
         if (data.authError) {
           handleAuthProblem(data);
         } else {
@@ -503,40 +518,95 @@
       }
     }
 
-    // ---------- MANUAL ENTRY ----------
-    $('manualBtn').onclick = async function () {
-      const value = $('manualId').value.trim();
-      if (!value) return;
+    async function handleScannedCode(text) {
+      const code = String(text).trim();
+      if (!code || busy) return;
+      const now = Date.now();
+      if (code === lastCode && now - lastTime < 5000) return;   // same card still in view
+      lastCode = code;
+      lastTime = now;
+      await submitScan({ action: 'scan', id: code }, false);
+    }
+
+    // ---------- SEARCH BY NAME ----------
+    function attachSearch(inputId, resultsId, onPick) {
+      const input = $(inputId);
+      const list = $(resultsId);
+      let timer = null;
+
+      input.addEventListener('input', function () {
+        clearTimeout(timer);
+        const query = input.value.trim();
+        if (query.length < 2) { list.innerHTML = ''; return; }
+
+        timer = setTimeout(async function () {
+          const mine = ++searchCounter;
+          try {
+            const data = await api({ action: 'search', query: query });
+            if (mine !== searchCounter) return;   // a newer search has started
+            if (data.authError) { handleAuthProblem(data); return; }
+            list.innerHTML = '';
+            if (!data.ok) { list.textContent = data.message; return; }
+            if (data.students.length === 0) { list.textContent = 'No match.'; return; }
+            data.students.forEach(function (s) {
+              const b = document.createElement('button');
+              b.className = 'pick';
+              b.textContent = s.name + '  -  ' + s.block;
+              b.onclick = function () { onPick(s); };
+              list.appendChild(b);
+            });
+          } catch (e) {
+            list.textContent = 'Search failed. Check your connection.';
+          }
+        }, 350);
+      });
+    }
+
+    // Manual entry: search, tap the student, confirm
+    attachSearch('manualSearch', 'manualResults', async function (s) {
+      if (!selectedEvent) { showPlain('Please select an event first.'); return; }
+      if (!confirm('Record attendance for ' + s.name + ' (' + s.block + ') in "' + eventTitle() + '"?')) return;
       getAudio();
-      await handleCode(value, true);
-      $('manualId').value = '';
-    };
-    $('manualId').addEventListener('keydown', function (e) {
-      if (e.key === 'Enter') $('manualBtn').click();
+      $('manualSearch').value = '';
+      $('manualResults').innerHTML = '';
+      await submitScan({ action: 'scanref', ref: s.ref }, true);
     });
 
     // ---------- ADMIN CORRECTIONS ----------
+    attachSearch('fixSearch', 'fixResults', function (s) {
+      fixStudent = s;
+      $('fixSelected').textContent = 'Selected: ' + s.name + ' (' + s.block + ')';
+      $('fixSearch').value = '';
+      $('fixResults').innerHTML = '';
+    });
+
     $('fixBtn').onclick = async function () {
       const msg = $('fixMsg');
+      msg.style.color = '#222';
       msg.textContent = '';
       if (!selectedEvent) { msg.textContent = 'Please select an event first.'; return; }
+      if (!fixStudent) { msg.textContent = 'Please search for and select a student first.'; return; }
 
-      const id = $('fixId').value.trim();
       const action = $('fixAction').value;
       const reason = $('fixReason').value.trim();
-      if (!id || reason.length < 3) { msg.textContent = 'Please enter the student ID and a reason.'; return; }
+      if (reason.length < 3) { msg.textContent = 'Please enter a reason.'; return; }
 
       const what = action === 'DELETE_RECORD' ? 'DELETE the whole record of' : 'CLEAR the time out of';
-      if (!confirm('Are you sure you want to ' + what + ' ' + id + ' in "' + eventTitle() + '"?')) return;
+      if (!confirm('Are you sure you want to ' + what + ' ' + fixStudent.name + ' in "' + eventTitle() + '"?')) return;
 
       msg.textContent = 'Working...';
       try {
-        const data = await api({ action: 'correct', event: selectedEvent, id: id, correction: action, reason: reason });
+        const data = await api({ action: 'correct', event: selectedEvent, ref: fixStudent.ref,
+                                 correction: action, reason: reason });
         if (data.authError) { handleAuthProblem(data); return; }
         msg.textContent = data.message || (data.ok ? 'Done.' : 'Not done.');
         msg.style.color = data.ok ? '#1b7f3b' : '#b00020';
         if (data.stats) setStats(data.stats);
-        if (data.ok) { $('fixId').value = ''; $('fixReason').value = ''; }
+        if (data.ok) {
+          fixStudent = null;
+          $('fixSelected').textContent = 'No student selected.';
+          $('fixReason').value = '';
+        }
       } catch (e) {
         msg.style.color = '#b00020';
         msg.textContent = 'Network problem. Please check and try again.';
