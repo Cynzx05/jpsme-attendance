@@ -122,6 +122,13 @@
       .brand small { display: none; }
       .userbox span { display: none; }
     }
+h1,
+.card h2,
+.secondary,
+.stat b,
+.resultbox .n,
+#fixSelected,
+.signin h2 { color: #000; }
   </style>
 </head>
 <body>
@@ -192,6 +199,7 @@
                 <div id="frame"></div>
               </div>
               <div id="hint" class="hidden">Center the QR code inside the square.</div>
+              </div
             </div>
 
           <div class="actions">
@@ -515,6 +523,7 @@
         const b = document.createElement('div');
         b.textContent = data.student.block;
         box.appendChild(b);
+      }
 
       const m = document.createElement('div');
       m.className = 'm';
