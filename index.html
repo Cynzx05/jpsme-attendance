@@ -27,7 +27,6 @@
     #cam { position: relative; width: 100%; aspect-ratio: 1 / 1; background: #000; border-radius: 0 0 10px 10px; overflow: hidden; margin-bottom: 10px; }
     #cam video { width: 100%; height: 100%; object-fit: cover; display: block; }
     #frame { position: absolute; top: 8%; left: 8%; right: 8%; bottom: 8%; border: 3px solid rgba(255,255,255,0.85); border-radius: 14px; pointer-events: none; }
-    #stick { position: sticky; top: 0; z-index: 20; width: min(100%, 52vh); margin: 0 auto; background: #f1f3f6; } 
     #hint { text-align: center; font-size: 13px; color: #555; margin: -4px 0 10px 0; }
     #result { border-radius: 10px; padding: 14px; text-align: center; background: #fff; }
     #result .t { font-size: 20px; font-weight: bold; }
@@ -90,14 +89,12 @@
     </div>
 
     <button id="camBtn">Start camera</button>
-        <div id="stick">
-      <div id="banner" class="hidden"></div>
-      <div id="cam" class="hidden">
-        <video id="video" playsinline muted></video>
-        <div id="frame"></div>
-      </div>
-      <div id="hint" class="hidden">Center the QR code inside the square.</div>
+    <div id="banner" class="hidden"></div>
+    <div id="cam" class="hidden">
+      <video id="video" playsinline muted></video>
+      <div id="frame"></div>
     </div>
+    <div id="hint" class="hidden">Center the QR code inside the square.</div>
 
     <div id="result">Select an event, then start the camera.</div>
 
@@ -134,8 +131,8 @@
 
   <script>
     // ---------- SETTINGS ----------
-    const CLIENT_ID = '646402889810-r6dflk4blp6p72tbqh6kme6vs3b230qp.apps.googleusercontent.com';
-    const API_URL = 'https://script.google.com/macros/s/AKfycbwyudP0jRC3PE5uG7UC7gZ79wnSOnIiENxyrGBmoADG5AbB4rV8ZDGZFcz9JoA-AARI/exec';
+    const CLIENT_ID = '1013378136610-427pj75t0aspbo8r8nbp6qng7o95fbrc.apps.googleusercontent.com';
+    const API_URL = 'https://script.google.com/macros/s/AKfycbymG7_7Byz6aNKs5cptnRK0Phto6K4A1bpqZF-JMKyxFlPEOtKZvuikMGH8gSaQuvyb8g/exec';
 
     // ---------- STATE ----------
     let idToken = null;
@@ -389,12 +386,6 @@
         n.className = 'n';
         n.textContent = data.student.name;
         box.appendChild(n);
-        if (data.student.position) {
-          const pos = document.createElement('div');
-          pos.style.fontWeight = 'bold';
-          pos.textContent = data.student.position;
-          box.appendChild(pos);
-        }
         const b = document.createElement('div');
         b.textContent = data.student.block;
         box.appendChild(b);
