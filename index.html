@@ -261,6 +261,7 @@ h1,
 
     // ---------- STATE ----------
     let idToken = null;
+    let session = null;
     let events = [];
     let selectedEvent = '';
     let scanning = false;
@@ -293,8 +294,8 @@ h1,
 
     // ---------- START ----------
     window.addEventListener('load', function () {
-      idToken = restoreToken();
-      if (idToken) { loadApp(); } else { showSignin(''); }
+      session = loadSession();
+      if (session) { loadApp(); } else { showSignin(''); }
       startSignIn();
     });
 
@@ -309,25 +310,23 @@ h1,
 
     function onCredential(response) {
       idToken = response.credential;
-      try {
-        const part = idToken.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
-        const payload = JSON.parse(atob(part));
-        sessionStorage.setItem('jpsme_token', JSON.stringify({ token: idToken, exp: payload.exp }));
-      } catch (e) { /* not important */ }
+      session = null;
       loadApp();
     }
 
-    function restoreToken() {
-      try {
-        const saved = JSON.parse(sessionStorage.getItem('jpsme_token') || 'null');
-        if (saved && saved.exp * 1000 > Date.now() + 60000) return saved.token;
-      } catch (e) { /* ignore */ }
-      return null;
+    function loadSession() {
+      try { return localStorage.getItem('jpsme_session'); } catch (e) { return null; }
+    }
+
+    function saveSession(value) {
+      session = value;
+      try { localStorage.setItem('jpsme_session', value); } catch (e) { /* ignore */ }
     }
 
     function clearToken() {
       idToken = null;
-      try { sessionStorage.removeItem('jpsme_token'); } catch (e) { /* ignore */ }
+      session = null;
+      try { localStorage.removeItem('jpsme_session'); } catch (e) { /* ignore */ }
     }
 
     function showSignin(message) {
@@ -352,10 +351,11 @@ h1,
 
     // ---------- TALKING TO THE BACKEND ----------
     async function api(payload, quiet) {
-      payload.token = idToken;
+    if (session) payload.session = session; else payload.token = idToken;
       const started = Date.now();
       const res = await fetch(API_URL, { method: 'POST', body: JSON.stringify(payload) });
       const data = await res.json();
+      if (data.session) saveSession(data.session);
       if (!quiet) {
         const total = ((Date.now() - started) / 1000).toFixed(1);
         $('timing').textContent = 'Last request: ' + total + ' s in total' +
@@ -791,7 +791,7 @@ h1,
 
     // ---------- KEEP THE BACKEND WARM ----------
     setInterval(function () {
-      if (idToken && !busy && !document.hidden) {
+      if ((session || idToken) && !busy && !document.hidden) {
         api({ action: 'init' }, true).catch(function () { /* ignore */ });
       }
     }, 4 * 60 * 1000);
